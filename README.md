@@ -257,11 +257,15 @@ Capturing alpha (https://alpha-3.ifrc-go.dev.togglecorp.com)...
 [1/2] Capturing: home @ desktop [alpha]
 [2/2] Capturing: afghanistan @ desktop [alpha]
 
-✓ home @ desktop [staging vs alpha] — 0.42% diff (passed)
-✗ afghanistan @ desktop [staging vs alpha] — 3.21% diff (failed)
+  ⚠ home @ desktop [staging vs alpha] — height differs (staging: 3525px, alpha: 2206px) — cropping both to 2206px
+✗ home @ desktop [staging vs alpha] — 23.98% diff (failed)
+  ⚠ afghanistan @ desktop [staging vs alpha] — height differs (staging: 2776px, alpha: 832px) — cropping both to 832px
+✗ afghanistan @ desktop [staging vs alpha] — 36.97% diff (failed)
 
-✓ 1 passed  ✗ 1 failed  —  staging vs alpha
+✓ 0 passed  ✗ 2 failed  —  staging vs alpha
 ```
+
+When two environments render the same page at different heights (because they have different amounts of data), the tool automatically crops both images to the shorter height and compares the overlapping area. This means you still get a meaningful diff even when content lengths differ — only a **width mismatch** is treated as a hard failure, since that indicates a real viewport or layout problem.
 
 ---
 
@@ -334,6 +338,117 @@ xdg-open /path/to/visual-regress/reports/report.html
 ```
 
 Failed results show a **three-image panel** — baseline on the left, current screenshot in the middle, diff on the right with changed pixels highlighted in red.
+
+---
+
+## Testing pages that require login
+
+Many real-world apps require authentication before you can see the pages you want to test. Playwright supports this through **browser session state** — you log in once, save the cookies and localStorage to a file, and every subsequent capture loads that saved session instead of logging in again.
+
+### How it works
+
+```
+  vrt login --env staging
+           │
+           ▼
+  Playwright opens the login page
+  Fills in username + password
+  Submits the form, waits for redirect
+           │
+           ▼
+  Saves .auth/staging.json
+  (contains all cookies + localStorage)
+           │
+           ▼
+  vrt run --env staging
+  Loads .auth/staging.json into every browser context
+  All pages open already authenticated
+```
+
+### Step 1 — add auth config to vrt.config.json
+
+```json
+{
+  "environments": {
+    "staging": "https://go-stage.ifrc.org"
+  },
+  "auth": {
+    "loginUrl": "/login",
+    "usernameField": "#username",
+    "passwordField": "#password",
+    "submitButton": "button[type=submit]",
+    "successUrl":  "/dashboard"
+  },
+  "pages": [
+    { "name": "dashboard", "path": "/dashboard" },
+    { "name": "reports",   "path": "/reports" }
+  ]
+}
+```
+
+| Field | Description |
+|---|---|
+| `loginUrl` | Path to the login page (appended to the environment's base URL) |
+| `usernameField` | CSS selector for the username/email input |
+| `passwordField` | CSS selector for the password input |
+| `submitButton` | CSS selector for the login submit button |
+| `successUrl` | Path the app redirects to after a successful login — used to confirm login worked |
+
+### Step 2 — store credentials in environment variables
+
+Never put passwords in `vrt.config.json`. Use environment variables instead:
+
+```bash
+export VRT_USERNAME=your@email.com
+export VRT_PASSWORD=yourpassword
+```
+
+Add these to your `~/.bashrc` or `~/.zshrc` so they're available in every terminal session.
+
+### Step 3 — run the login command
+
+```bash
+vrt login --env staging
+```
+
+This opens Chromium, navigates to the login page, fills in the credentials from `VRT_USERNAME` / `VRT_PASSWORD`, submits the form, and saves the session to `.auth/staging.json`. You only need to do this once — until the session expires.
+
+### Step 4 — run as normal
+
+```bash
+vrt run --env staging
+```
+
+The tool automatically detects `.auth/staging.json` and loads it into every browser context before navigating to your pages. No login screen will appear.
+
+### Important notes
+
+- **`.auth/` should be in `.gitignore`** — these files contain live session cookies and should never be committed.
+- **Sessions expire** — if you start getting login redirects in your screenshots, just run `vrt login --env staging` again to refresh the session.
+- **Each environment needs its own session** — `vrt login --env staging` and `vrt login --env production` create separate `.auth/staging.json` and `.auth/production.json` files.
+- **This feature is not yet implemented** in the current version — the sections above describe the planned design. See the implementation plan below if you want to add it.
+
+### Implementation plan (for contributors)
+
+To add login support, three files need updating:
+
+**1. `src/capture.js`** — before launching pages, check if `.auth/{envName}.json` exists and pass it to `browser.newContext({ storageState })`:
+```js
+const authFile = `.auth/${envName}.json`;
+const storageState = fs.existsSync(authFile) ? authFile : undefined;
+const context = await browser.newContext({ viewport, storageState });
+```
+
+**2. `src/config.js`** — pass through the `auth` block from `vrt.config.json` without validation (selectors are app-specific).
+
+**3. `cli.js`** — add a `vrt login` command that:
+- Reads `config.auth` and the env base URL
+- Reads `VRT_USERNAME` / `VRT_PASSWORD` from `process.env`
+- Opens a browser, navigates to `baseUrl + auth.loginUrl`
+- Fills `auth.usernameField` and `auth.passwordField`
+- Clicks `auth.submitButton`
+- Waits for navigation to `auth.successUrl`
+- Calls `context.storageState({ path: '.auth/${envName}.json' })`
 
 ---
 
