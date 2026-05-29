@@ -1,0 +1,15 @@
+{
+  "environments": {
+    "alpha": "https://alpha-3.ifrc-go.dev.togglecorp.com",
+    "staging": "https://go-stage.ifrc.org"
+  },
+  "threshold": 0.1,
+  "viewports": [
+    { "name": "desktop", "width": 1280, "height": 800 }
+  ],
+  "pages": [
+    { "name": "home", "path": "/" },
+    { "name": "afghanistan", "path": "/countries/14/ongoing-activities/emergencies" }
+  ],
+  "ignoreRegions": []
+}
